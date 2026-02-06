@@ -1,0 +1,84 @@
+# Meta-Watchdog Configuration
+
+# System configuration
+system:
+  name: "meta-watchdog"
+  version: "1.0.0"
+  log_level: "INFO"
+  
+# Performance thresholds
+thresholds:
+  reliability:
+    warning: 60.0    # Score below this triggers warning
+    critical: 40.0   # Score below this triggers critical alert
+  
+  failure_probability:
+    alert: 0.5       # Probability above this triggers alert
+    critical: 0.8    # Probability above this triggers critical
+  
+  drift:
+    threshold: 0.1   # Drift score threshold
+  
+  calibration:
+    error_threshold: 0.15  # Maximum acceptable calibration error
+
+# Monitoring settings
+monitoring:
+  window_size: 100         # Rolling window size
+  health_check_interval: 60    # Seconds between health checks
+  deep_analysis_interval: 300  # Seconds between deep analyses
+
+# Reliability scoring weights
+reliability_weights:
+  performance: 0.30
+  calibration: 0.25
+  stability: 0.20
+  freshness: 0.15
+  feature_health: 0.10
+
+# Alert configuration
+alerts:
+  max_per_hour: 100
+  deduplicate_window: 60   # Seconds to deduplicate similar alerts
+  
+  # Alert routing
+  routes:
+    critical:
+      - console
+      - webhook
+    warning:
+      - console
+    info:
+      - log
+
+# Simulation settings
+simulation:
+  default_severity: 0.5
+  scenarios_to_test:
+    - feature_drift
+    - noise_injection
+    - outlier_storm
+    - trend_shift
+
+# Dashboard settings
+dashboard:
+  refresh_interval: 5      # Seconds
+  history_length: 100      # Number of records to display
+  use_colors: true
+
+# Logging configuration
+logging:
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/meta_watchdog.log"
+  max_size: 10485760       # 10MB
+  backup_count: 5
+
+# Feature configuration (example)
+features:
+  names: []                # Auto-generate if empty
+  critical_features: []    # Features to monitor more closely
+  
+# Model configuration
+model:
+  auto_detect: true
+  confidence_threshold: 0.5
