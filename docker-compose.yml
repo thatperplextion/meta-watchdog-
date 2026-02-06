@@ -1,0 +1,164 @@
+version: '3.8'
+
+# Meta-Watchdog: Docker Compose Configuration
+# Use: docker-compose up -d
+
+services:
+  # ===========================================
+  # Meta-Watchdog Core Service
+  # ===========================================
+  meta-watchdog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: metawatchdog/meta-watchdog:latest
+    container_name: meta-watchdog
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - watchdog-logs:/app/logs
+      - watchdog-data:/app/data
+    environment:
+      - MW_LOG_LEVEL=INFO
+      - MW_CONFIG_PATH=/app/config/default_config.yaml
+      - MW_TELEMETRY_ENABLED=true
+    healthcheck:
+      test: ["CMD", "python", "-c", "from meta_watchdog import __version__; print(__version__)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - watchdog-network
+
+  # ===========================================
+  # Demo Service with Synthetic Data
+  # ===========================================
+  meta-watchdog-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: meta-watchdog-demo
+    command: ["demo", "--batches", "100", "--batch-size", "50"]
+    volumes:
+      - ./config:/app/config:ro
+      - watchdog-logs:/app/logs
+    environment:
+      - MW_LOG_LEVEL=DEBUG
+    depends_on:
+      - meta-watchdog
+    networks:
+      - watchdog-network
+    profiles:
+      - demo
+
+  # ===========================================
+  # Development Environment
+  # ===========================================
+  meta-watchdog-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: meta-watchdog-dev
+    volumes:
+      - .:/app
+      - watchdog-dev-cache:/root/.cache
+    environment:
+      - MW_LOG_LEVEL=DEBUG
+      - PYTHONDONTWRITEBYTECODE=1
+    networks:
+      - watchdog-network
+    profiles:
+      - dev
+    stdin_open: true
+    tty: true
+
+  # ===========================================
+  # Test Runner
+  # ===========================================
+  meta-watchdog-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: meta-watchdog-test
+    command: ["pytest", "tests/", "-v", "--cov=meta_watchdog", "--cov-report=html"]
+    volumes:
+      - .:/app
+      - ./htmlcov:/app/htmlcov
+    environment:
+      - MW_LOG_LEVEL=WARNING
+    networks:
+      - watchdog-network
+    profiles:
+      - test
+
+  # ===========================================
+  # Prometheus (Optional Monitoring)
+  # ===========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: watchdog-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - watchdog-network
+    profiles:
+      - monitoring
+
+  # ===========================================
+  # Grafana (Optional Dashboards)
+  # ===========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: watchdog-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=watchdog
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    networks:
+      - watchdog-network
+    profiles:
+      - monitoring
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  watchdog-network:
+    driver: bridge
+    name: meta-watchdog-network
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  watchdog-logs:
+    name: meta-watchdog-logs
+  watchdog-data:
+    name: meta-watchdog-data
+  watchdog-dev-cache:
+    name: meta-watchdog-dev-cache
+  prometheus-data:
+    name: meta-watchdog-prometheus
+  grafana-data:
+    name: meta-watchdog-grafana
