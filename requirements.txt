@@ -36,5 +36,6 @@ pytest-cov>=3.0.0
 rich>=12.0.0
 typer>=0.9.0
 
-# Optional: Dashboard
-# streamlit>=1.20.0
+# Web Server
+flask>=2.0.0
+gunicorn>=21.0.0
