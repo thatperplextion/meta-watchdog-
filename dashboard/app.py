@@ -11,8 +11,15 @@ from datetime import datetime
 import threading
 import time
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent directory to path (works on both local and Render)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+# Also try Render's path
+render_path = '/opt/render/project/src'
+
+for path in [parent_dir, render_path]:
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from meta_watchdog.data import DatasetLoader
 from meta_watchdog.orchestrator import MetaWatchdogOrchestrator
