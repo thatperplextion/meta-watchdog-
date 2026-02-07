@@ -56,7 +56,7 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Typing :: Typed",
     ],
-    python_requires=">=3.9",
+    python_requires=">=3.9,<3.14",
     install_requires=[
         "numpy>=1.21.0",
         "scipy>=1.7.0",
