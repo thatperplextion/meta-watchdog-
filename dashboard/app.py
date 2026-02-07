@@ -1,48 +1,138 @@
 """
 Meta-Watchdog Real-Time Monitoring Dashboard
 A Flask-based web interface for presenting ML model health monitoring.
+SELF-CONTAINED VERSION - No external meta_watchdog imports needed.
 """
 
 from flask import Flask, render_template, jsonify
 import numpy as np
-import sys
+import pandas as pd
 import os
 from datetime import datetime
-import threading
-import time
-
-# Add parent directory to path (works on both local and Render)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-# Also try Render's path
-render_path = '/opt/render/project/src'
-
-for path in [parent_dir, render_path]:
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-from meta_watchdog.data import DatasetLoader
-from meta_watchdog.orchestrator import MetaWatchdogOrchestrator
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error
+from dataclasses import dataclass
+from typing import Tuple, Optional
 
 app = Flask(__name__)
 
-# Global state
+# ============================================================================
+# EMBEDDED DATA LOADER (from meta_watchdog.data)
+# ============================================================================
+@dataclass
+class DatasetInfo:
+    """Information about a loaded dataset."""
+    name: str
+    n_samples: int
+    n_features: int
+    feature_names: list
+    target_name: str
+
+def load_electricity_data(data_path: str, sample_size: int = 5000) -> Tuple[np.ndarray, np.ndarray, DatasetInfo]:
+    """Load electricity consumption dataset."""
+    csv_file = os.path.join(data_path, 'household_power_consumption.txt')
+    
+    feature_names = ['Global_reactive_power', 'Voltage', 'Global_intensity', 
+                    'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3']
+    
+    if not os.path.exists(csv_file):
+        # Generate synthetic data if file not found
+        print("[Data] CSV not found, generating synthetic electricity data...")
+        np.random.seed(42)
+        n = sample_size
+        
+        X = np.column_stack([
+            np.random.uniform(0.1, 0.5, n),    # Global_reactive_power
+            np.random.uniform(230, 250, n),    # Voltage
+            np.random.uniform(0.5, 20, n),     # Global_intensity
+            np.random.uniform(0, 50, n),       # Sub_metering_1
+            np.random.uniform(0, 50, n),       # Sub_metering_2
+            np.random.uniform(0, 20, n),       # Sub_metering_3
+        ])
+        
+        # Target: combination of features with noise
+        y = 0.5 * X[:, 2] + 0.1 * X[:, 0] + 0.01 * X[:, 3] + np.random.normal(0, 0.2, n)
+        
+    else:
+        print(f"[Data] Loading from {csv_file}")
+        df = pd.read_csv(csv_file, sep=';', low_memory=False)
+        
+        # Clean data
+        df = df.replace('?', np.nan)
+        numeric_cols = ['Global_active_power', 'Global_reactive_power', 'Voltage',
+                       'Global_intensity', 'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3']
+        
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        df = df.dropna(subset=numeric_cols)
+        
+        if len(df) > sample_size:
+            df = df.sample(n=sample_size, random_state=42)
+        
+        X = df[feature_names].values.astype(float)
+        y = df['Global_active_power'].values.astype(float)
+    
+    info = DatasetInfo(
+        name='Electricity Consumption',
+        n_samples=len(y),
+        n_features=X.shape[1],
+        feature_names=feature_names,
+        target_name='Global_active_power'
+    )
+    
+    print(f"[Data] Loaded {info.n_samples} samples with {info.n_features} features")
+    return X, y, info
+
+# ============================================================================
+# EMBEDDED ORCHESTRATOR (from meta_watchdog.orchestrator)
+# ============================================================================
+class SimpleOrchestrator:
+    """Simplified Meta-Watchdog orchestrator for monitoring."""
+    
+    def __init__(self):
+        self.observations = []
+        self.drift_score = 0.0
+        self.health_score = 1.0
+    
+    def observe(self, X, y_true, y_pred, confidence):
+        """Record an observation."""
+        mae = np.mean(np.abs(y_pred - y_true))
+        self.drift_score = min(mae / 0.5, 1.0)
+        self.health_score = np.mean(confidence)
+        
+        self.observations.append({
+            'timestamp': datetime.now(),
+            'samples': len(y_true),
+            'mae': mae,
+            'confidence': self.health_score,
+            'drift_score': self.drift_score
+        })
+    
+    def get_health(self):
+        return self.health_score
+    
+    def get_drift_score(self):
+        return self.drift_score
+
+# ============================================================================
+# DASHBOARD STATE
+# ============================================================================
 class DashboardState:
     def __init__(self):
         self.model = None
         self.orchestrator = None
         self.X_test = None
         self.y_test = None
-        self.loader = None
         self.metrics_history = []
         self.current_batch = 0
         self.is_running = False
         self.drift_mode = False
         self.r2_score = 0
         self.total_samples = 0
+        self.feature_names = []
         
 state = DashboardState()
 
@@ -50,11 +140,30 @@ def initialize_system():
     """Initialize the ML model and monitoring system."""
     print("[Dashboard] Initializing system...")
     
-    # Load data - use parent directory path
-    data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-    state.loader = DatasetLoader(data_path)
-    X, y, info = state.loader.load_electricity(sample_size=5000)
+    # Find data path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    possible_paths = [
+        os.path.join(os.path.dirname(current_dir), 'data'),
+        '/opt/render/project/src/data',
+        os.path.join(current_dir, 'data'),
+    ]
+    
+    data_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            data_path = path
+            break
+    
+    if data_path is None:
+        data_path = possible_paths[0]
+        os.makedirs(data_path, exist_ok=True)
+    
+    print(f"[Dashboard] Using data path: {data_path}")
+    
+    # Load data
+    X, y, info = load_electricity_data(data_path, sample_size=5000)
     state.total_samples = info.n_samples
+    state.feature_names = info.feature_names
     
     # Split data
     X_train, state.X_test, y_train, state.y_test = train_test_split(
@@ -70,10 +179,13 @@ def initialize_system():
     state.r2_score = r2_score(state.y_test, y_pred)
     
     # Initialize orchestrator
-    state.orchestrator = MetaWatchdogOrchestrator()
+    state.orchestrator = SimpleOrchestrator()
     
-    print(f"[Dashboard] System ready! R² = {state.r2_score:.4f}")
+    print(f"[Dashboard] System ready! R2 = {state.r2_score:.4f}")
 
+# ============================================================================
+# ROUTES
+# ============================================================================
 @app.route('/')
 def index():
     """Main dashboard page."""
@@ -96,7 +208,7 @@ def get_status():
 def get_metrics():
     """Get metrics history."""
     return jsonify({
-        'history': state.metrics_history[-50:],  # Last 50 entries
+        'history': state.metrics_history[-50:],
         'current_batch': state.current_batch
     })
 
@@ -106,7 +218,6 @@ def process_batch(mode):
     if state.model is None:
         return jsonify({'error': 'System not initialized'}), 400
     
-    # Get batch index
     batch_size = 100
     idx = state.current_batch * batch_size
     end_idx = min(idx + batch_size, len(state.X_test))
@@ -149,7 +260,6 @@ def process_batch(mode):
         status = 'normal'
         status_text = 'Normal'
     
-    # Create metrics entry
     metrics = {
         'batch': state.current_batch + 1,
         'timestamp': datetime.now().strftime('%H:%M:%S'),
@@ -184,10 +294,17 @@ def api_initialize():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    # Initialize on startup
+# ============================================================================
+# STARTUP
+# ============================================================================
+# Initialize on import (for gunicorn)
+try:
     initialize_system()
-    
+except Exception as e:
+    print(f"[Dashboard] Init warning: {e}")
+    print("[Dashboard] Will generate synthetic data")
+
+if __name__ == '__main__':
     print("\n" + "="*60)
     print("   META-WATCHDOG DASHBOARD")
     print("="*60)
