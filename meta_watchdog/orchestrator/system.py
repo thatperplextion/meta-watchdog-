@@ -199,11 +199,13 @@ class MetaWatchdogOrchestrator:
         
         # Update performance monitor
         if y_true is not None and predictions is not None:
-            self.performance_monitor.observe(
-                y_true=y_true,
-                y_pred=predictions,
-                confidence=confidences,
-            )
+            # Observe each prediction
+            for i in range(len(y_true)):
+                self.performance_monitor.observe({
+                    "prediction": predictions[i] if hasattr(predictions, '__len__') else predictions,
+                    "actual": y_true[i] if hasattr(y_true, '__len__') else y_true,
+                    "confidence": confidences[i] if confidences is not None and hasattr(confidences, '__len__') else (confidences if confidences is not None else 0.5),
+                })
         elif confidences is not None:
             # Observe confidence only
             for conf in np.atleast_1d(confidences):
@@ -246,15 +248,16 @@ class MetaWatchdogOrchestrator:
     
     def _compute_reliability(self) -> ReliabilityScore:
         """Compute current reliability score."""
-        metrics = self.performance_monitor.get_metrics()
+        metrics = self.performance_monitor.compute_current_metrics()
         return self.reliability_scorer.compute_score(metrics)
     
     def _predict_failures(self) -> FailurePrediction:
         """Predict potential failures."""
-        metrics = self.performance_monitor.get_metrics()
-        return self.failure_predictor.predict(
-            metrics,
-            self._health_history[-10:] if self._health_history else []
+        metrics = self.performance_monitor.compute_current_metrics()
+        reliability = self._compute_reliability()
+        return self.failure_predictor.predict_failure(
+            current_metrics=metrics,
+            reliability_score=reliability,
         )
     
     def _check_for_alerts(
@@ -283,17 +286,17 @@ class MetaWatchdogOrchestrator:
             ))
         
         # Failure prediction alerts
-        if failure_prediction.probability >= self.config.failure_probability_alert:
+        if failure_prediction.failure_probability >= self.config.failure_probability_alert:
             level = (AlertLevel.CRITICAL 
-                     if failure_prediction.probability >= 0.8 
+                     if failure_prediction.failure_probability >= 0.8 
                      else AlertLevel.WARNING)
             alerts.append(Alert(
                 level=level,
-                message=f"Failure predicted: {failure_prediction.probability:.0%} probability",
+                message=f"Failure predicted: {failure_prediction.failure_probability:.0%} probability",
                 component="failure_predictor",
                 data={
-                    "probability": failure_prediction.probability,
-                    "type": failure_prediction.failure_type,
+                    "probability": failure_prediction.failure_probability,
+                    "type": failure_prediction.predicted_failure_type,
                 },
             ))
         
@@ -455,7 +458,7 @@ class MetaWatchdogOrchestrator:
         return {
             "status": "healthy" if reliability.score >= 70 else "needs_attention",
             "reliability_score": reliability.score,
-            "failure_probability": failure_prediction.probability,
+            "failure_probability": failure_prediction.failure_probability,
             "active_alerts": len([a for a in self._alerts if a.level != AlertLevel.NONE]),
             "mode": self._mode.value,
             "observations": self._observation_count,

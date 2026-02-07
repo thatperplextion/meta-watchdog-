@@ -215,12 +215,19 @@ def cmd_demo(args: argparse.Namespace) -> int:
     
     class DemoModel(BaseModel):
         def __init__(self):
-            super().__init__("demo", "1.0")
+            super().__init__()
+            self._is_fitted = True  # Pre-fitted for demo
+            
         def _predict_impl(self, X):
             return (np.sum(X, axis=1) > 0).astype(int)
-        def _predict_proba_impl(self, X):
-            scores = 1 / (1 + np.exp(-np.sum(X, axis=1) * 0.5))
-            return np.column_stack([1 - scores, scores])
+        
+        def _get_confidence_impl(self, X, predictions):
+            scores = 1 / (1 + np.exp(-np.abs(np.sum(X, axis=1)) * 0.5))
+            return scores
+        
+        def fit(self, X, y, **kwargs):
+            self._is_fitted = True
+            return self
     
     print(f"Running {args.scenario} scenario demo with {args.batches} batches...")
     print("=" * 50)
@@ -244,7 +251,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
         )
         
         score = result["reliability"].score
-        risk = result["failure_prediction"].probability
+        risk = result["failure_prediction"].failure_probability
         
         # Visual indicator
         if score >= 70:
